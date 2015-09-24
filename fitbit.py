@@ -19,7 +19,6 @@ import ConfigParser
 home_directory = "/Applications/FitBit.app/"
 queue_directory = home_directory + 'queue/'
 current_session = home_directory + 'current_session.json'
-#log_stamp = "/Applications/FitBit.app/fitbit.stamp"
 
 #####################################################################################################################################
 
@@ -60,14 +59,17 @@ def CalcDuration(session):
 
 def GetConfig(option):
 	config = ConfigParser.ConfigParser()
-	config.read(home_directory + 'config.ini')
-	try:
-		ret = config.get('config',option)
-	except Exception:
-		print "Can't location config option " + option + " in config."
-		return None
-	return ret
-
+	
+	if not len(config.read(home_directory + 'config.ini')):
+		print "Can't read config.ini.... \nAborting."
+		exit()
+	
+	if config.has_option('config',option):
+		return config.get('config',option)
+	else:
+		print "Missing option " + option + "\nAborting."
+		exit()
+		
 #####################################################################################################################################
 
 def LogFitBitSession(session):
