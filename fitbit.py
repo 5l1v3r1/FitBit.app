@@ -16,31 +16,28 @@ import json
 import ConfigParser
 
 #####################################################################################################################################
+
+import sqlite3 as sqlite3
+
+#####################################################################################################################################
+
 home_directory = "/Applications/FitBit.app/"
-queue_directory = home_directory + 'queue/'
-current_session = home_directory + 'current_session.json'
 
 #####################################################################################################################################
 
-def QueueItem(item):
-	items = ReadSession(current_session)
-	if not items:
-		items = {}
-	for key in item:
-		items[key] = item[key]
-	with open(current_session, 'w') as f:
-		json.dump(items, f)
+class DatabaseManager(object):
+	def __init__(self, db):
+		self.conn = sqlite3.connect(db,isolation_level=None)
+		self.cursor = self.conn.cursor()
+		self._createTable()
+	
+	def close(self):
+		self.cursor.close()
+		self.conn.close()
+	
+	def _createTable(self):
+		self.cursor.execute("CREATE TABLE IF NOT EXISTS session(id INTEGER PRIMARY KEY,start_stamp VARCHAR(26),end_stamp VARCHAR(26),sent INTEGER DEFAULT 0,sent_stamp VARCHAR(26))")
 		
-#####################################################################################################################################
-
-def ReadSession(session_file):
-	if os.path.isfile(session_file):
-		with open(session_file, 'r') as f:
-			session = json.load(f)
-		if type(session) is dict:
-			return session
-	return None
-
 #####################################################################################################################################
 
 def CalcDuration(session):
@@ -65,11 +62,17 @@ def GetConfig(option):
 		exit()
 	
 	if config.has_option('config',option):
-		return config.get('config',option)
+		if not len(config.get('config',option)):
+			print option + " not set."
+			exit()
+		else:
+			return config.get('config',option)
 	else:
 		print "Missing option " + option + "\nAborting."
 		exit()
 		
+#####################################################################################################################################
+# Log Activiety
 #####################################################################################################################################
 
 def LogFitBitSession(session):
@@ -78,34 +81,45 @@ def LogFitBitSession(session):
 		authd_client = fitbit.Fitbit(GetConfig('consumer_key'),GetConfig('consumer_secret'), resource_owner_key=GetConfig('user_key'), resource_owner_secret=GetConfig('user_secret'))
 		if authd_client:
 			authd_client.sleep()
-			ret = authd_client.log_activity({'activityId':'16030', 'manualCalories':'0', 'startTime':duration['startTime'], 'durationMillis':duration['millis'], 'date':duration['date']})
+			ret = authd_client.log_activity(
+				{
+					'activityId':'16030',
+					'manualCalories':'0',
+					'startTime':duration['startTime'],
+					'durationMillis':duration['millis'],
+					'date':duration['date']
+				})
 			if int(ret['activityLog']['activityId']) == 16030:
 				return True
 	return False
 
 #####################################################################################################################################
 # Log it to current session
+#####################################################################################################################################
 
-if os.path.isfile(current_session):
-	QueueItem({'session_end': str(datetime.datetime.now())})
-	#####################################################################################################################################
-	# Move File to queue incase LogFitBitSession gets a web exception , dont want it blocking future events and fudging activey length.
-	if os.path.isfile(current_session):
-		os.rename(current_session, queue_directory + 'session-'+str(datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))+'.json')
+db = DatabaseManager(home_directory + "fitbit_sessions.db")
+	
+db.cursor.execute("SELECT MAX(id) FROM session WHERE end_stamp is NULL AND sent=0")
+try:
+	row = db.cursor.fetchone()[0]
+except:
+	row = False
+	
+if row:
+	db.cursor.execute("UPDATE session SET end_stamp=? WHERE id = ?",(str(datetime.datetime.now()),row))
 else:
-	QueueItem({'session_start': str(datetime.datetime.now())})
+	db.cursor.execute("INSERT INTO session (start_stamp) values(?)",(str(datetime.datetime.now()),))
 
 #####################################################################################################################################
 # 'Attempt' to dequeue actively events.
+#####################################################################################################################################
 
-queue_files = [ f for f in listdir(queue_directory) if os.path.isfile(os.path.join(queue_directory,f)) and f.endswith('.json')]
-
-for queue_file in queue_files:
-	session = ReadSession(queue_directory + queue_file)
-	if session:
-		if LogFitBitSession(session) is True:
-			os.unlink(queue_directory + queue_file)
-
+db.cursor.execute("SELECT id,start_stamp,end_stamp FROM session WHERE (start_stamp NOT NULL AND end_stamp NOT NULL) AND sent=0")
+for queue in db.cursor.fetchall():
+	if LogFitBitSession({'session_start': queue[1],'session_end': queue[2]}) is True:
+		db.cursor.execute("UPDATE session SET sent=1,sent_stamp=? WHERE id = ?",(str(datetime.datetime.now()),str(queue[0])))
+		
 #####################################################################################################################################
 # The world just ended....
 #####################################################################################################################################
+db.close()
